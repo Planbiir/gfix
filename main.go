@@ -57,15 +57,15 @@ type point struct {
 	TrackIdx, SegIdx, PtIdx int       // Original indices for multi-segment GPX preservation
 }
 
-// UNIVERSAL DEFAULTS (no knobs) - battle-tested for all trail conditions
+// Universal constants for GPS cleaning
 const (
 	eleWindow         = 7     // median filter on elevation (smooths baro noise)
 	maxHairpinDegrees = 160.0 // allow sharp trail switchbacks (vs 120° before)
 	minSpeed          = 0.1   // m/s (0.36 km/h - allows extended stops)
-	ultraMaxSpeed     = 12.0  // m/s (~43 km/h) conservative for trail running
+	ultraMaxSpeed     = 12.0  // m/s (~43 km/h) for trail running
 	pauseSpeed        = 0.7   // m/s (slightly higher than before for robustness)
 	minPauseDuration  = 120.0 // seconds (2 min - typical aid station stop)
-	teleportMeters    = 200.0 // jump guard when timestamps missing
+	teleportMeters    = 120.0 // jump guard when timestamps missing
 	lofMinK           = 10    // minimum LOF neighbors (was too low before)
 	lofMaxK           = 20    // maximum LOF neighbors
 	lofMinThreshold   = 1.5   // LOF floor
@@ -81,7 +81,7 @@ type config struct {
 	Workers    int
 }
 
-// chooseK picks optimal k for LOF based on track size (community-tested)
+// chooseK picks k for LOF based on track size
 func chooseK(n int) int {
 	k := n/1000 + 10 // base 10, +1 per 1000 points
 	k = max(k, lofMinK)
@@ -89,11 +89,11 @@ func chooseK(n int) int {
 	return k
 }
 
-// neighborWindow calculates optimal search window for k-NN (performance vs accuracy)
+// neighborWindow calculates search window for k-NN
 func neighborWindow(n, k int) int {
 	switch {
 	case n <= 10000:
-		// Small/medium tracks: use generous window
+		// Small/medium tracks
 		return max(2*k+1, min(max(30, n/20), n))
 	case n <= 50000:
 		// Large tracks: limit to ±400 points
@@ -231,12 +231,9 @@ type lofData struct {
 	lof       float64
 }
 
-// lofOutlierDetection implements the Local Outlier Factor algorithm as described by
-// Breunig, Kriegel, Ng, and Sander (2000) in "LOF: Identifying Density-Based Local Outliers".
-// The algorithm computes outlier scores based on the local density deviation of data points
-// with respect to their neighborhoods using mathematically rigorous formulations.
+// lofOutlierDetection finds GPS outliers using Local Outlier Factor
 func lofOutlierDetection(inputPoints []point, k int) []int {
-	fmt.Printf("🔬 LOF Analysis (Breunig et al. 2000) with k=%d...\n", k)
+	fmt.Printf("🔬 LOF analysis with k=%d...\n", k)
 	n := len(inputPoints)
 
 	if n < k+1 {
@@ -259,7 +256,7 @@ func lofOutlierDetection(inputPoints []point, k int) []int {
 	}
 	fmt.Printf("   Protected %d pause points from filtering\n", pauseCount)
 
-	// Mathematical Implementation following Breunig et al. (2000)
+	// Calculate distances and find neighbors
 	// Step 1: Calculate k-distance and k-nearest neighbors for each point
 	lofValues := make([]lofData, n)
 
@@ -318,7 +315,7 @@ func lofOutlierDetection(inputPoints []point, k int) []int {
 	}
 	mad := medianFloat(deviations)
 
-	// Robust threshold: median + 2.5 * MAD (conservative for trail running)
+	// Threshold: median + 2.5 * MAD
 	// This is much more stable on tracks with legitimate sharp turns
 	robustThreshold := lofMedian + 2.5*mad
 
@@ -397,7 +394,7 @@ func findKNearestNeighbors(points []point, targetIdx, k int) []neighbor {
 	return neighbors
 }
 
-// calculateLRD computes Local Reachability Density following Breunig et al. (2000)
+// calculateLRD computes Local Reachability Density
 // LRD_k(A) = |N_k(A)| / Σ_{B∈N_k(A)} reach-dist_k(A,B)
 // where reach-dist_k(A,B) = max(k-distance(B), d(A,B))
 func calculateLRD(pointIndex int, lofValues []lofData) float64 {
@@ -427,7 +424,7 @@ func calculateLRD(pointIndex int, lofValues []lofData) float64 {
 	return float64(len(neighbors)) / sumReachabilityDist
 }
 
-// calculateLOF computes Local Outlier Factor following Breunig et al. (2000)
+// calculateLOF computes Local Outlier Factor
 // LOF_k(A) = (1/|N_k(A)|) Σ_{B∈N_k(A)} LRD_k(B)/LRD_k(A)
 // This measures how much more/less dense point A is compared to its neighbors
 func calculateLOF(pointIndex int, lofValues []lofData) float64 {
@@ -469,9 +466,9 @@ func calculateLOF(pointIndex int, lofValues []lofData) float64 {
 }
 
 func advancedPrecisionFilter(inputPoints []point) []int {
-	fmt.Printf("🔬 GPS outlier detection using LOF algorithm...\n")
+	fmt.Printf("🔬 GPS outlier detection using LOF...\n")
 
-	// Always use LOF algorithm - no reference tracks needed
+	// Use LOF for GPS outlier detection
 	return fastLOFDetection(inputPoints)
 }
 
@@ -496,73 +493,9 @@ func fastLOFDetection(inputPoints []point) []int {
 	// Step 2: Apply LOF to remaining points for subtle anomaly detection
 	fmt.Printf("   Step 2: LOF analysis on %d velocity-filtered points...\n", len(filteredPoints))
 
-	// Use universal k selection (community-tested)
+	// Select k based on track size
 	filteredN := len(filteredPoints)
 	k := chooseK(filteredN)
-
-	if filteredN > 500000 {
-		// Extreme case fallback: use sampling only for massive files (>500k points)
-		fmt.Printf("   Extreme size track (%d points). Using sampling for LOF analysis...\n", filteredN)
-		sampleSize := 500000 // Sample 500k points for extreme cases
-		sampleStep := filteredN / sampleSize
-		sampleStep = max(sampleStep, 1)
-
-		sampledPoints := make([]point, 0, sampleSize)
-		for i := 0; i < filteredN; i += sampleStep {
-			sampledPoints = append(sampledPoints, filteredPoints[i])
-		}
-
-		k = chooseK(len(sampledPoints))
-		fmt.Printf("   Analyzing sample of %d points (every %d points)\n", len(sampledPoints), sampleStep)
-		sampledLOF := lofOutlierDetection(sampledPoints, k)
-
-		// Map sampled results back to original indices
-		finalIndices := make([]int, 0, filteredN)
-		validSampledSet := make(map[int]bool)
-		for _, idx := range sampledLOF {
-			validSampledSet[idx] = true
-		}
-
-		for i, originalIdx := range velocityFiltered {
-			sampledIdx := i / sampleStep
-			if i%sampleStep == 0 {
-				// This point was sampled
-				if validSampledSet[sampledIdx] {
-					finalIndices = append(finalIndices, originalIdx)
-				}
-			} else {
-				// Point between samples - keep by default (conservative)
-				finalIndices = append(finalIndices, originalIdx)
-			}
-		}
-
-		// SAFETY GUARDRAILS: Never remove too many points or distance (large track case)
-		originalCount := len(inputPoints)
-		finalCount := len(finalIndices)
-		removalPercent := float64(originalCount-finalCount) / float64(originalCount) * 100
-
-		if removalPercent > removedPctGuard {
-			fmt.Printf("   ⚠️  Safety override: Would remove %.1f%% > %.0f%% limit. Using velocity filter only.\n",
-				removalPercent, removedPctGuard)
-			return velocityFiltered
-		}
-
-		// Check distance guardrail
-		originalDistance := calculateDistance(inputPoints)
-		finalDistance := calculateDistance(extractPoints(inputPoints, finalIndices))
-		distanceReduction := 0.0
-		if originalDistance > 0 {
-			distanceReduction = (originalDistance - finalDistance) / originalDistance * 100
-		}
-
-		if distanceReduction > distDropGuard {
-			fmt.Printf("   ⚠️  Safety override: Would drop %.1f%% > %.0f%% distance. Using velocity filter only.\n",
-				distanceReduction, distDropGuard)
-			return velocityFiltered
-		}
-
-		return finalIndices
-	}
 
 	lofFilteredIndices := lofOutlierDetection(filteredPoints, k)
 
@@ -573,7 +506,7 @@ func fastLOFDetection(inputPoints []point) []int {
 		finalIndices = append(finalIndices, originalIdx)
 	}
 
-	// SAFETY GUARDRAILS: Never remove too many points or distance
+	// Safety limits
 	originalCount := len(inputPoints)
 	finalCount := len(finalIndices)
 	removalPercent := float64(originalCount-finalCount) / float64(originalCount) * 100
@@ -690,11 +623,11 @@ func detectMaxReasonableSpeed(points []point) float64 {
 
 	if p95 <= 8.0 { // 28.8 km/h
 		// Running/Hiking activity
-		maxSpeed = 12.0 // 43.2 km/h (generous for running)
+		maxSpeed = 12.0 // 43.2 km/h for running
 		activityType = "running/hiking"
 	} else if p95 <= 20.0 { // 72 km/h
 		// Cycling activity
-		maxSpeed = 30.0 // 108 km/h (generous for cycling)
+		maxSpeed = 30.0 // 108 km/h for cycling
 		activityType = "cycling"
 	} else {
 		// High-speed activity (skiing, motorsports)
@@ -949,6 +882,22 @@ func velocityOutlierFilter(inputPoints []point) []int {
 			speedToNext := distToNext / timeToNext
 			speedOK = (speedFromPrev >= minSpeed && speedFromPrev <= maxSpeed) &&
 				(speedToNext >= minSpeed && speedToNext <= maxSpeed)
+
+			// Strong geometric spike detector (two-leg "boomerang")
+			if speedOK {
+				base := haversineDistance(prev.Lat, prev.Lon, next.Lat, next.Lon)
+
+				// Case A: classic boomerang (both legs long, base short, big turn)
+				if distToPrev > 120 && distToNext > 120 && base < 40 && turnAngle > 100 {
+					speedOK = false
+				} else {
+					// Case B: ratio-based spike (sum of legs >> base)
+					ratio := (distToPrev + distToNext) / math.Max(base, 1)
+					if ratio > 6 && turnAngle > 90 {
+						speedOK = false
+					}
+				}
+			}
 		} else if validPrev {
 			// Only previous timestamp valid
 			speedFromPrev := distToPrev / timeToPrev
@@ -968,30 +917,15 @@ func velocityOutlierFilter(inputPoints []point) []int {
 		if speedOK && directionOK {
 			validIndices = append(validIndices, i)
 		} else {
-			// Additional check for stops: allow if reasonable location but failed speed/direction
-			if len(validIndices) > 0 && i < len(inputPoints)-2 {
-				lastValidIdx := validIndices[len(validIndices)-1]
-				nextNext := inputPoints[i+1]
-
-				// Check if it's a legitimate stop (low speed + reasonable location)
-				distFromLastValid := haversineDistance(curr.Lat, curr.Lon,
-					inputPoints[lastValidIdx].Lat, inputPoints[lastValidIdx].Lon)
-				distToNextNext := haversineDistance(curr.Lat, curr.Lon, nextNext.Lat, nextNext.Lon)
-
-				// Allow stops: close to track AND not a sharp direction change
-				isReasonableStop := distFromLastValid <= 50.0 && distToNextNext <= 50.0
-
-				// Check for low speed if we have valid timestamps
-				isLowSpeed := false
-				if validPrev && validNext {
-					speedFromPrev := distToPrev / timeToPrev
-					speedToNext := distToNext / timeToNext
-					isLowSpeed = speedFromPrev <= 2.0 && speedToNext <= 2.0
-				}
-
-				if isReasonableStop && (isLowSpeed || turnAngle <= 90.0) {
-					validIndices = append(validIndices, i)
-				}
+			// Only rescue if it's clearly a pause (very low speed) — not just geometry
+			isLowSpeed := false
+			if validPrev && validNext {
+				speedFromPrev := distToPrev / timeToPrev
+				speedToNext := distToNext / timeToNext
+				isLowSpeed = speedFromPrev <= 0.7 && speedToNext <= 0.7 // align with pauseSpeed
+			}
+			if isLowSpeed {
+				validIndices = append(validIndices, i)
 			}
 		}
 	}
@@ -1125,7 +1059,7 @@ func cleanGPX(cfg *config) error {
 
 	// Safety guardrails: warn about excessive filtering
 	if removalPercentage > removedPctGuard {
-		fmt.Printf("⚠️  WARNING: Removed >%.0f%% of points! Conservative ultra-trail thresholds exceeded.\n", removedPctGuard)
+		fmt.Printf("⚠️  WARNING: Removed >%.0f%% of points! Safety thresholds exceeded.\n", removedPctGuard)
 		fmt.Printf("    Track may have unusual GPS conditions. Verify results carefully.\n")
 	}
 	if originalDistance > 0 && distanceReduction > distDropGuard {
