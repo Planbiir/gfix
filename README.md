@@ -1,5 +1,7 @@
 # gfix
 
+A simple command-line tool that fixes GPS errors in your activity tracks from Garmin, Strava, or any GPX file.
+
 Fix GPS errors in your running, hiking, or cycling tracks. Removes GPS spikes and phantom distance while keeping real data like stops at aid stations.
 
 ## What It Does

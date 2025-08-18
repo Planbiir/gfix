@@ -5,8 +5,11 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -14,20 +17,58 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: go.mod
+        go-version: '1.25'
+    
+    - name: Run tests
+      run: go test -v ./...
     
     - name: Build binaries
       run: |
-        GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o gpx-cleaner-linux-amd64 .
-        GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o gpx-cleaner-darwin-amd64 .
-        GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o gpx-cleaner-darwin-arm64 .
-        GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o gpx-cleaner-windows-amd64.exe .
+        mkdir -p dist
+        
+        # Linux AMD64
+        GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o dist/gfix-linux-amd64 .
+        
+        # macOS AMD64
+        GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o dist/gfix-darwin-amd64 .
+        
+        # macOS ARM64 (M1/M2/M3)
+        GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o dist/gfix-darwin-arm64 .
+        
+        # Windows AMD64
+        GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o dist/gfix-windows-amd64.exe .
     
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         files: |
-          gpx-cleaner-linux-amd64
-          gpx-cleaner-darwin-amd64
-          gpx-cleaner-darwin-arm64
-          gpx-cleaner-windows-amd64.exe
+          dist/gfix-linux-amd64
+          dist/gfix-darwin-amd64
+          dist/gfix-darwin-arm64
+          dist/gfix-windows-amd64.exe
+        body: |
+          ## What's New
+          
+          Download the binary for your platform and fix GPS errors in your activity tracks.
+          
+          ## Installation
+          
+          1. Download the appropriate binary for your system
+          2. Make it executable (Mac/Linux): `chmod +x gfix-*`
+          3. Run: `./gfix-* -i your-track.gpx`
+          
+          ## Quick Commands
+          
+          **Linux/Mac:**
+          ```bash
+          wget https://github.com/planbiir/gfix/releases/latest/download/gfix-linux-amd64
+          chmod +x gfix-linux-amd64
+          ./gfix-linux-amd64 -i track.gpx
+          ```
+          
+          **Windows (PowerShell):**
+          ```powershell
+          Invoke-WebRequest -Uri "https://github.com/planbiir/gfix/releases/latest/download/gfix-windows-amd64.exe" -OutFile "gfix.exe"
+          .\gfix.exe -i track.gpx
+          ```
+        generate_release_notes: true

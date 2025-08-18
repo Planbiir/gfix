@@ -1153,7 +1153,13 @@ func cleanGPX(cfg *config) error {
 
 func main() {
 	if len(os.Args) < 2 || (os.Args[1] != "-i" && !strings.HasPrefix(os.Args[1], "--input")) {
-		fmt.Println("usage: gpx-cleaner -i /path/to/file.gpx")
+		fmt.Println("usage: gfix -i /path/to/file.gpx")
+		fmt.Println()
+		fmt.Println("examples:")
+		fmt.Println("  gfix -i track.gpx")
+		fmt.Println("  gfix -i \"My Activity.gpx\"")
+		fmt.Println("  ./gfix-linux-amd64 -i track.gpx")
+		fmt.Println("  gfix-windows-amd64.exe -i \"C:\\Downloads\\track.gpx\"")
 		os.Exit(2)
 	}
 
