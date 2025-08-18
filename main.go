@@ -84,12 +84,8 @@ type config struct {
 // chooseK picks optimal k for LOF based on track size (community-tested)
 func chooseK(n int) int {
 	k := n/1000 + 10 // base 10, +1 per 1000 points
-	if k < lofMinK {
-		k = lofMinK
-	}
-	if k > lofMaxK {
-		k = lofMaxK
-	}
+	k = max(k, lofMinK)
+	k = min(k, lofMaxK)
 	return k
 }
 
@@ -504,21 +500,19 @@ func fastLOFDetection(inputPoints []point) []int {
 	filteredN := len(filteredPoints)
 	k := chooseK(filteredN)
 
-	if filteredN > 50000 {
-		// Very large files: use sampling for LOF to avoid performance issues
-		fmt.Printf("   Large track detected (%d points). Using sampling for LOF analysis...\n", filteredN)
-		sampleSize := 20000 // Sample 20k points for LOF
+	if filteredN > 500000 {
+		// Extreme case fallback: use sampling only for massive files (>500k points)
+		fmt.Printf("   Extreme size track (%d points). Using sampling for LOF analysis...\n", filteredN)
+		sampleSize := 500000 // Sample 500k points for extreme cases
 		sampleStep := filteredN / sampleSize
-		if sampleStep < 1 {
-			sampleStep = 1
-		}
+		sampleStep = max(sampleStep, 1)
 
 		sampledPoints := make([]point, 0, sampleSize)
 		for i := 0; i < filteredN; i += sampleStep {
 			sampledPoints = append(sampledPoints, filteredPoints[i])
 		}
 
-		k = chooseK(len(sampledPoints)) // Use same logic for sampled data
+		k = chooseK(len(sampledPoints))
 		fmt.Printf("   Analyzing sample of %d points (every %d points)\n", len(sampledPoints), sampleStep)
 		sampledLOF := lofOutlierDetection(sampledPoints, k)
 

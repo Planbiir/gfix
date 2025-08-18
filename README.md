@@ -62,12 +62,15 @@ Your cleaned track will be saved as `your-track_cleaned.gpx` in the same folder.
 - GPS errors in mountains or forests
 - Tracks that show unrealistic speeds
 
-## What It Preserves
+## What It Preserves (Safety First)
 
-- Real stops at aid stations
-- Heart rate and power data
-- Elevation information
-- Timestamps
+- ✅ **Real stops** at aid stations (won't remove genuine pauses)
+- ✅ **All sensor data**: heart rate, power, cadence, temperature
+- ✅ **Elevation information** and barometric data
+- ✅ **Timestamps** and activity metadata
+- ✅ **Multi-segment tracks** (intervals, laps, waypoints)
+- ✅ **Garmin/Strava extensions** (TrackPointExtension, TPX data)
+- ✅ **Safety limits**: never removes >20% of points or >25% of distance
 
 ---
 
