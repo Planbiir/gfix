@@ -1,4 +1,4 @@
-# GPX Track Cleaner
+# gfix
 
 Fix GPS errors in your running, hiking, or cycling tracks. Removes GPS spikes and phantom distance while keeping real data like stops at aid stations.
 
@@ -11,33 +11,33 @@ Fix GPS errors in your running, hiking, or cycling tracks. Removes GPS spikes an
 
 ## Download
 
-1. Go to [Releases](https://github.com/timofeipermiakov/gpx-precision-cleaner/releases)
+1. Go to [Releases](https://github.com/planbiir/gfix/releases)
 2. Download the file for your computer:
-   - **Windows**: `gpx-cleaner-windows-amd64.exe`
-   - **Mac (Intel)**: `gpx-cleaner-darwin-amd64`
-   - **Mac (M1/M2/M3)**: `gpx-cleaner-darwin-arm64`
-   - **Linux**: `gpx-cleaner-linux-amd64`
+   - **Windows**: `gfix-windows-amd64.exe`
+   - **Mac (Intel)**: `gfix-darwin-amd64`
+   - **Mac (M1/M2/M3)**: `gfix-darwin-arm64`
+   - **Linux**: `gfix-linux-amd64`
 
 ## How to Use
 
 ### Windows
-1. Download `gpx-cleaner-windows-amd64.exe`
+1. Download `gfix-windows-amd64.exe`
 2. Put it in the same folder as your GPX file
 3. Open Command Prompt in that folder
-4. Type: `gpx-cleaner-windows-amd64.exe -i your-track.gpx`
+4. Type: `gfix-windows-amd64.exe -i your-track.gpx`
 
 ### Mac
 1. Download the Mac version
 2. Open Terminal
 3. Navigate to where you downloaded it
-4. Type: `chmod +x gpx-cleaner-darwin-*` (makes it runnable)
-5. Type: `./gpx-cleaner-darwin-* -i your-track.gpx`
+4. Type: `chmod +x gfix-darwin-*` (makes it runnable)
+5. Type: `./gfix-darwin-* -i your-track.gpx`
 
 ### Linux
 1. Download the Linux version
 2. Open terminal
-3. Type: `chmod +x gpx-cleaner-linux-amd64`
-4. Type: `./gpx-cleaner-linux-amd64 -i your-track.gpx`
+3. Type: `chmod +x gfix-linux-amd64`
+4. Type: `./gfix-linux-amd64 -i your-track.gpx`
 
 ## Result
 
@@ -73,14 +73,14 @@ Your cleaned track will be saved as `your-track_cleaned.gpx` in the same folder.
 
 ### Install with Go
 ```bash
-go install github.com/timofeipermiakov/gpx-precision-cleaner@latest
+go install github.com/planbiir/gfix@latest
 ```
 
 ### Build from Source
 ```bash
-git clone https://github.com/timofeipermiakov/gpx-precision-cleaner.git
-cd gpx-precision-cleaner
-go build -o gpx-cleaner .
+git clone https://github.com/planbiir/gfix.git
+cd gfix
+go build -o gfix .
 ```
 
 ### Run Tests

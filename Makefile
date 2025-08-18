@@ -1,6 +1,6 @@
-# GPX Distance Fixer
+# gfix - GPS track fixer
 
-APP_NAME = gpx-cleaner
+APP_NAME = gfix
 BUILD_DIR = ./build
 
 .PHONY: build test clean all
