@@ -62,3 +62,5 @@ coverage.html
 # Release artifacts
 *.tar.gz
 *.zip
+
+*.gocache

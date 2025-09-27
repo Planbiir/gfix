@@ -9,7 +9,7 @@ BUILD_DIR = ./build
 build:
 	@echo "Building $(APP_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	go build -o $(BUILD_DIR)/$(APP_NAME) .
+	go build -o $(BUILD_DIR)/$(APP_NAME) ./cmd/gfix
 
 # Run tests
 test:
@@ -26,10 +26,10 @@ clean:
 all:
 	@echo "Building for all platforms..."
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64 .
-	GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64 .
-	GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe .
+	GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-linux-amd64 ./cmd/gfix
+	GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-darwin-amd64 ./cmd/gfix
+	GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/gfix
+	GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" -o $(BUILD_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/gfix
 
 # Help
 help:

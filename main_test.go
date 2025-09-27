@@ -42,11 +42,11 @@ func TestCalculateDistance(t *testing.T) {
 }
 
 func TestLOFWithOutliers(t *testing.T) {
-	// Test LOF algorithm with some clear outliers
+	// Test LOF with clear outliers
 	inputPoints := make([]point, 20)
 
 	// Create a linear track
-	for i := 0; i < 18; i++ {
+	for i := range 18 {
 		inputPoints[i] = point{
 			Lat:       46.0 + float64(i)*0.0001,
 			Lon:       7.0 + float64(i)*0.0001,
@@ -98,7 +98,7 @@ func TestLOFNotOverlyAggressive(t *testing.T) {
 		}
 	}
 
-	// Test LOF algorithm
+	// Test LOF
 	k := chooseK(len(inputPoints))
 	result := lofOutlierDetection(inputPoints, k)
 

@@ -23,9 +23,7 @@ func BenchmarkMonteRosaTrack(b *testing.B) {
 
 	b.Logf("Monte Rosa track: %d GPS points", len(inputPoints))
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		validIndices := advancedPrecisionFilter(inputPoints)
 
 		if len(validIndices) == 0 {
@@ -43,7 +41,7 @@ func BenchmarkMonteRosaTrack(b *testing.B) {
 	}
 }
 
-// Benchmark LOF algorithm performance with different track sizes
+// Benchmark LOF performance with different track sizes
 func BenchmarkLOFSizes(b *testing.B) {
 	sizes := []int{1000, 5000, 10000, 20000}
 
@@ -61,7 +59,7 @@ func BenchmarkLOFSizes(b *testing.B) {
 
 			// Add some outliers (5% of points)
 			outlierCount := size / 20
-			for i := 0; i < outlierCount; i++ {
+			for i := range outlierCount {
 				idx := i * (size / outlierCount)
 				if idx < len(points) {
 					points[idx].Lat += 0.001 // Move 100m away
@@ -71,7 +69,7 @@ func BenchmarkLOFSizes(b *testing.B) {
 
 			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				result := fastLOFDetection(points)
 				if len(result) == 0 {
 					b.Fatal("LOF removed all points")
