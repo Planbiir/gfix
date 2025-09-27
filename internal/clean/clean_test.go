@@ -1,6 +1,7 @@
 package clean
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -17,19 +18,19 @@ func TestClean(t *testing.T) {
 
 	config := DefaultConfig()
 	result, err := Clean(points, config)
-	
+
 	if err != nil {
 		t.Fatalf("Clean failed: %v", err)
 	}
-	
+
 	if len(result.Points) == 0 {
 		t.Errorf("Clean removed all points")
 	}
-	
+
 	if result.Stats.OriginalPoints != len(points) {
 		t.Errorf("Expected %d original points, got %d", len(points), result.Stats.OriginalPoints)
 	}
-	
+
 	if result.Stats.FinalPoints != len(result.Points) {
 		t.Errorf("Expected %d final points, got %d", len(result.Points), result.Stats.FinalPoints)
 	}
@@ -61,7 +62,7 @@ func TestLOFWithOutliers(t *testing.T) {
 	// Should detect and remove the 2 obvious outliers
 	expectedOutliers := 2
 	actualRemoved := len(inputPoints) - len(result)
-	
+
 	if actualRemoved != expectedOutliers {
 		t.Errorf("Expected to remove %d outliers, but removed %d", expectedOutliers, actualRemoved)
 	}
@@ -73,11 +74,11 @@ func TestHaversineDistance(t *testing.T) {
 	lat2, lon2 := 46.001, 7.001
 
 	distance := haversineDistance(lat1, lon1, lat2, lon2)
-	
+
 	// Should be approximately 140 meters
 	expected := 140.0
 	tolerance := 10.0
-	
+
 	if distance < expected-tolerance || distance > expected+tolerance {
 		t.Errorf("Expected distance ~%.0fm, got %.0fm", expected, distance)
 	}
@@ -100,16 +101,61 @@ func TestCalculateDistance(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	config := DefaultConfig()
-	
+
 	if config.MinSpeed <= 0 {
 		t.Errorf("MinSpeed should be > 0, got %f", config.MinSpeed)
 	}
-	
+
 	if config.PauseSpeed <= 0 {
 		t.Errorf("PauseSpeed should be > 0, got %f", config.PauseSpeed)
 	}
-	
+
 	if config.LofMinK <= 0 {
 		t.Errorf("LofMinK should be > 0, got %d", config.LofMinK)
+	}
+}
+
+func TestVelocityOutlierFilterRespectsMaxSpeedOverride(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	points := []Point{
+		{Lat: 0, Lon: 0, Time: base},
+		{Lat: 0, Lon: 0.00027, Time: base.Add(1 * time.Second)},
+		{Lat: 0, Lon: 0.00054, Time: base.Add(2 * time.Second)},
+	}
+
+	config := DefaultConfig()
+	config.MaxSpeed = 5 // 18 km/h manual limit
+
+	kept := velocityOutlierFilter(points, config)
+
+	if len(kept) != 2 {
+		t.Fatalf("expected middle point to be removed by manual max speed, got indices %v", kept)
+	}
+
+	if kept[0] != 0 || kept[1] != len(points)-1 {
+		t.Fatalf("expected to keep only first and last points, got %v", kept)
+	}
+}
+
+func TestCleanDistancePercentNoNaN(t *testing.T) {
+	base := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	points := []Point{
+		{Lat: 46.0, Lon: 7.0, Time: base},
+		{Lat: 46.0, Lon: 7.0, Time: base.Add(1 * time.Second)},
+		{Lat: 46.0, Lon: 7.0, Time: base.Add(2 * time.Second)},
+	}
+
+	config := DefaultConfig()
+	result, err := Clean(points, config)
+	if err != nil {
+		t.Fatalf("Clean failed: %v", err)
+	}
+
+	if math.IsNaN(result.Stats.DistancePercent) || math.IsInf(result.Stats.DistancePercent, 0) {
+		t.Fatalf("expected finite distance percent, got %v", result.Stats.DistancePercent)
+	}
+
+	if result.Stats.DistancePercent != 0 {
+		t.Fatalf("expected zero distance percent for identical points, got %v", result.Stats.DistancePercent)
 	}
 }

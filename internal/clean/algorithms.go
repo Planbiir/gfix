@@ -48,12 +48,20 @@ func velocityOutlierFilter(inputPoints []Point, config Config) []int {
 	}
 
 	// Auto-detect activity type and set appropriate speed limits
-	activityType, maxSpeed, p95Speed := detectActivityType(inputPoints)
-	
-	fmt.Printf("   Auto-detected activity: %s (P95: %.1f m/s, avg interval: %.1f s)\n", 
-		activityType, p95Speed, calculateAverageInterval(inputPoints))
-	fmt.Printf("   Speed limit: %.1f m/s (%.1f km/h)\n", maxSpeed, maxSpeed*3.6)
-	fmt.Printf("   Detected activity max speed: %.1f m/s (%.1f km/h)\n", maxSpeed, maxSpeed*3.6)
+	activityType, autoMaxSpeed, p95Speed := detectActivityType(inputPoints)
+	avgInterval := calculateAverageInterval(inputPoints)
+
+	fmt.Printf("   Auto-detected activity: %s (P95: %.1f m/s, avg interval: %.1f s)\n",
+		activityType, p95Speed, avgInterval)
+
+	maxSpeed := autoMaxSpeed
+	if config.MaxSpeed > 0 {
+		maxSpeed = config.MaxSpeed
+		fmt.Printf("   Overriding speed limit to %.1f m/s (%.1f km/h); detected limit %.1f m/s\n",
+			maxSpeed, maxSpeed*3.6, autoMaxSpeed)
+	} else {
+		fmt.Printf("   Speed limit: %.1f m/s (%.1f km/h)\n", maxSpeed, maxSpeed*3.6)
+	}
 
 	validIndices := []int{0} // Always keep first point
 
@@ -266,7 +274,7 @@ func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 
 	a := math.Sin(deltaLat/2)*math.Sin(deltaLat/2) +
 		math.Cos(lat1Rad)*math.Cos(lat2Rad)*
-		math.Sin(deltaLon/2)*math.Sin(deltaLon/2)
+			math.Sin(deltaLon/2)*math.Sin(deltaLon/2)
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 
 	return earthRadius * c
@@ -277,11 +285,11 @@ func medianFloat(values []float64) float64 {
 	if len(values) == 0 {
 		return 0.0
 	}
-	
+
 	sorted := make([]float64, len(values))
 	copy(sorted, values)
 	sort.Float64s(sorted)
-	
+
 	if len(sorted)%2 == 0 {
 		return (sorted[len(sorted)/2-1] + sorted[len(sorted)/2]) / 2
 	}
@@ -292,19 +300,19 @@ func percentile(values []float64, p float64) float64 {
 	if len(values) == 0 {
 		return 0.0
 	}
-	
+
 	sorted := make([]float64, len(values))
 	copy(sorted, values)
 	sort.Float64s(sorted)
-	
+
 	index := (p / 100.0) * float64(len(sorted)-1)
 	lower := int(math.Floor(index))
 	upper := int(math.Ceil(index))
-	
+
 	if lower == upper {
 		return sorted[lower]
 	}
-	
+
 	weight := index - float64(lower)
 	return sorted[lower]*(1-weight) + sorted[upper]*weight
 }
