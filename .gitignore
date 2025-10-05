@@ -5,6 +5,11 @@
 *.so
 *.dylib
 
+# Project-specific binaries (created by go build)
+gfix
+mergeanalyze
+tmpcalc
+
 # Test binary, built with `go test -c`
 *.test
 

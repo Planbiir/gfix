@@ -2,6 +2,7 @@ package merge
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -38,6 +39,29 @@ type Config struct {
 	// (cumulative distance ratio) of the primary gap and the matched segment
 	// in the secondary track.
 	SpatialProgressTolerance float64
+
+	// MaxSearchDistanceMultiplier scales the direct distance between anchors
+	// to determine how far we search along the secondary track.
+	MaxSearchDistanceMultiplier float64
+
+	// MaxSearchDistancePaddingMeters adds an absolute allowance to the search window.
+	MaxSearchDistancePaddingMeters float64
+
+	// MinReliableSpeedMPS sets the minimum average speed (m/s) required to
+	// trust the expected-distance estimation derived from timestamps.
+	MinReliableSpeedMPS float64
+
+	// MaxSpeedRatio controls how much faster than the computed average speed we allow
+	// the search to consider when matching the secondary track.
+	MaxSpeedRatio float64
+
+	// DistanceLowerRatio and DistanceUpperRatio describe acceptable bounds for
+	// inserted segment length relative to the expected distance estimate.
+	DistanceLowerRatio float64
+	DistanceUpperRatio float64
+
+	// Anchor tie-break threshold for distance score (as fraction of expected distance).
+	AnchorTieBreakRatio float64
 }
 
 // Stats reports what happened during the merge so callers can surface it to users.
@@ -46,17 +70,39 @@ type Stats struct {
 	GapsFilled     int
 	InsertedPoints int
 	SpatialMatches int
+
+	// Debug information for spatial matching
+	SpatialDebugInfo []SpatialMatchInfo
+}
+
+// SpatialMatchInfo provides debugging details for each spatial match attempt
+type SpatialMatchInfo struct {
+	GapIndex     int     // Which gap this was (0-based)
+	BeforeAnchor string  // Description of before anchor point
+	AfterAnchor  string  // Description of after anchor point
+	SegmentStart int     // Start index in secondary track
+	SegmentEnd   int     // End index in secondary track
+	DistanceKm   float64 // Distance of inserted segment in km
+	Valid        bool    // Whether this match was accepted
+	Reason       string  // Why it was accepted/rejected
 }
 
 // DefaultConfig returns the recommended configuration for production use.
 func DefaultConfig() Config {
 	return Config{
-		GapThreshold:             2 * time.Minute,
-		MaxDeviationMeters:       60,
-		EnableSpatialFallback:    true,
-		SpatialWindowSize:        15,
-		SpatialMaxAvgDeviation:   35,
-		SpatialProgressTolerance: 0.15,
+		GapThreshold:                   2 * time.Minute,
+		MaxDeviationMeters:             60,
+		EnableSpatialFallback:          true,
+		SpatialWindowSize:              15,
+		SpatialMaxAvgDeviation:         35,
+		SpatialProgressTolerance:       0.15,
+		MaxSearchDistanceMultiplier:    5.0,
+		MaxSearchDistancePaddingMeters: 2000.0,
+		MinReliableSpeedMPS:            1.0,
+		MaxSpeedRatio:                  1.6,
+		DistanceLowerRatio:             0.4,
+		DistanceUpperRatio:             1.6,
+		AnchorTieBreakRatio:            0.05,
 	}
 }
 
@@ -87,6 +133,25 @@ func MergeTracks(primary, secondary *gpx.GPX, cfg Config) (*gpx.GPX, Stats, erro
 	}
 	if cfg.SpatialProgressTolerance <= 0 || cfg.SpatialProgressTolerance > 1 {
 		cfg.SpatialProgressTolerance = defaults.SpatialProgressTolerance
+	}
+	if cfg.MaxSearchDistanceMultiplier <= 0 {
+		cfg.MaxSearchDistanceMultiplier = defaults.MaxSearchDistanceMultiplier
+	}
+	if cfg.MaxSearchDistancePaddingMeters < 0 {
+		cfg.MaxSearchDistancePaddingMeters = defaults.MaxSearchDistancePaddingMeters
+	}
+	if cfg.MinReliableSpeedMPS <= 0 {
+		cfg.MinReliableSpeedMPS = defaults.MinReliableSpeedMPS
+	}
+	if cfg.MaxSpeedRatio <= 0 {
+		cfg.MaxSpeedRatio = defaults.MaxSpeedRatio
+	}
+	if cfg.DistanceLowerRatio <= 0 || cfg.DistanceLowerRatio >= cfg.DistanceUpperRatio {
+		cfg.DistanceLowerRatio = defaults.DistanceLowerRatio
+		cfg.DistanceUpperRatio = defaults.DistanceUpperRatio
+	}
+	if cfg.AnchorTieBreakRatio <= 0 || cfg.AnchorTieBreakRatio >= 1 {
+		cfg.AnchorTieBreakRatio = defaults.AnchorTieBreakRatio
 	}
 
 	primaryPoints := primary.FlattenPoints()
@@ -238,7 +303,7 @@ func mergeByGeometry(primaryPoints, secondaryPoints []gpx.Point, cfg Config, sta
 		primaryBeforeProgress := primaryProgress[i] / primaryTotal
 		primaryAfterProgress := primaryProgress[i+1] / primaryTotal
 
-		segment, lastIdx := findSpatialSegment(
+		segment, lastIdx, debugInfo := findSpatialSegment(
 			beforeContext,
 			afterContext,
 			secondaryPoints,
@@ -248,7 +313,13 @@ func mergeByGeometry(primaryPoints, secondaryPoints []gpx.Point, cfg Config, sta
 			secondaryTotal,
 			primaryBeforeProgress,
 			primaryAfterProgress,
+			stats.GapsDetected-1, // Current gap index (0-based)
+			gap,
 		)
+
+		// Add debug information regardless of success/failure
+		stats.SpatialDebugInfo = append(stats.SpatialDebugInfo, debugInfo)
+
 		if len(segment) == 0 {
 			continue
 		}
@@ -281,25 +352,48 @@ func findSpatialSegment(
 	secondaryTotal float64,
 	primaryBeforeProgress float64,
 	primaryAfterProgress float64,
-) ([]gpx.Point, int) {
-	if len(beforeContext) == 0 || len(afterContext) == 0 {
-		return nil, usedUntil
+	gapIndex int,
+	gapDuration time.Duration,
+) ([]gpx.Point, int, SpatialMatchInfo) {
+	debug := SpatialMatchInfo{
+		GapIndex: gapIndex,
+		Valid:    false,
 	}
 
-	anchored, anchoredEnd := findAnchoredSegment(
-		beforeContext[len(beforeContext)-1],
-		afterContext[0],
+	if len(beforeContext) == 0 || len(afterContext) == 0 {
+		debug.Reason = "empty context windows"
+		return nil, usedUntil, debug
+	}
+
+	beforePoint := beforeContext[len(beforeContext)-1]
+	afterPoint := afterContext[0]
+
+	debug.BeforeAnchor = fmt.Sprintf("%.6f,%.6f", beforePoint.Lat, beforePoint.Lon)
+	debug.AfterAnchor = fmt.Sprintf("%.6f,%.6f", afterPoint.Lat, afterPoint.Lon)
+
+	expectedDistanceMeters := estimateExpectedDistanceMeters(beforeContext, afterContext, gapDuration, cfg)
+
+	anchored, anchoredEnd, anchoredDebug := findAnchoredSegmentWithDebug(
+		beforePoint,
+		afterPoint,
 		secondary,
 		usedUntil,
 		cfg,
 		secondaryProgress,
-		secondaryTotal,
-		primaryBeforeProgress,
-		primaryAfterProgress,
+		expectedDistanceMeters,
 	)
+
 	if len(anchored) > 0 {
-		return anchored, anchoredEnd
+		debug.SegmentStart = anchoredDebug.SegmentStart
+		debug.SegmentEnd = anchoredDebug.SegmentEnd
+		debug.DistanceKm = anchoredDebug.DistanceKm
+		debug.Valid = true
+		debug.Reason = "anchored match: " + anchoredDebug.Reason
+		return anchored, anchoredEnd, debug
 	}
+
+	// If anchored matching failed, record why and try window matching
+	debug.Reason = "anchored failed: " + anchoredDebug.Reason
 
 	beforeMatch, beforeScore := matchWindow(
 		beforeContext,
@@ -311,18 +405,21 @@ func findSpatialSegment(
 		primaryBeforeProgress,
 		cfg.SpatialProgressTolerance,
 	)
-	// debug: fmt.Printf("beforeMatch=%d (target %.3f, actual %.3f) score=%.2f\n", beforeMatch, primaryBeforeProgress, secondaryProgress[min(beforeMatch+len(beforeContext)/2, len(secondaryProgress)-1)]/secondaryTotal, beforeScore)
+
 	if beforeMatch < 0 {
-		return nil, usedUntil
+		debug.Reason += "; no before window match"
+		return nil, usedUntil, debug
 	}
 
 	if cfg.SpatialMaxAvgDeviation > 0 && beforeScore > cfg.SpatialMaxAvgDeviation {
-		return nil, usedUntil
+		debug.Reason += fmt.Sprintf("; before score %.1fm > %.1fm", beforeScore, cfg.SpatialMaxAvgDeviation)
+		return nil, usedUntil, debug
 	}
 
 	afterStart := beforeMatch + len(beforeContext)
 	if afterStart >= len(secondary) {
-		return nil, usedUntil
+		debug.Reason += "; no room for after window"
+		return nil, usedUntil, debug
 	}
 
 	afterMatch, afterScore := matchWindow(
@@ -335,41 +432,60 @@ func findSpatialSegment(
 		primaryAfterProgress,
 		cfg.SpatialProgressTolerance,
 	)
-	// debug: fmt.Printf("afterMatch=%d (target %.3f, actual %.3f) score=%.2f\n", afterMatch, primaryAfterProgress, secondaryProgress[min(afterMatch+len(afterContext)/2, len(secondaryProgress)-1)]/secondaryTotal, afterScore)
+
 	if afterMatch < 0 {
-		return nil, usedUntil
+		debug.Reason += "; no after window match"
+		return nil, usedUntil, debug
 	}
 
 	if cfg.SpatialMaxAvgDeviation > 0 && afterScore > cfg.SpatialMaxAvgDeviation {
-		return nil, usedUntil
+		debug.Reason += fmt.Sprintf("; after score %.1fm > %.1fm", afterScore, cfg.SpatialMaxAvgDeviation)
+		return nil, usedUntil, debug
 	}
 
 	if afterMatch <= beforeMatch+len(beforeContext)-1 {
-		return nil, usedUntil
+		debug.Reason += "; overlapping windows"
+		return nil, usedUntil, debug
 	}
 
 	segmentStart := beforeMatch + len(beforeContext)
 	segmentEnd := afterMatch
 	if segmentStart >= segmentEnd {
-		return nil, usedUntil
+		debug.Reason += "; empty segment"
+		return nil, usedUntil, debug
 	}
+
+	segmentDistanceKm := 0.0
+	if len(secondaryProgress) > segmentEnd && len(secondaryProgress) > segmentStart {
+		segmentDistanceKm = (secondaryProgress[segmentEnd] - secondaryProgress[segmentStart]) / 1000.0
+	}
+
+	if !validateSegmentDistance(expectedDistanceMeters, segmentDistanceKm, cfg, &debug) {
+		return nil, usedUntil, debug
+	}
+
+	debug.SegmentStart = segmentStart
+	debug.SegmentEnd = segmentEnd
+	debug.DistanceKm = segmentDistanceKm
+	debug.Valid = true
+	debug.Reason = fmt.Sprintf("window match: before@%d(%.1fm) after@%d(%.1fm)", beforeMatch, beforeScore, afterMatch, afterScore)
 
 	segment := make([]gpx.Point, segmentEnd-segmentStart)
 	copy(segment, secondary[segmentStart:segmentEnd])
 
-	return segment, segmentEnd - 1
+	return segment, segmentEnd - 1, debug
 }
 
-func findAnchoredSegment(
+func findAnchoredSegmentWithDebug(
 	beforePoint, afterPoint gpx.Point,
 	secondary []gpx.Point,
 	usedUntil int,
 	cfg Config,
 	secondaryProgress []float64,
-	secondaryTotal float64,
-	primaryBeforeProgress float64,
-	primaryAfterProgress float64,
-) ([]gpx.Point, int) {
+	expectedDistanceMeters float64,
+) ([]gpx.Point, int, SpatialMatchInfo) {
+	debug := SpatialMatchInfo{}
+
 	startIdx := usedUntil + 1
 	if startIdx < 0 {
 		startIdx = 0
@@ -379,71 +495,150 @@ func findAnchoredSegment(
 	if maxDist <= 0 {
 		maxDist = 100
 	}
+	type candidate struct {
+		idx  int
+		dist float64
+	}
 
-	startCandidates := make([]int, 0)
-	for idx := startIdx; idx < len(secondary); idx++ {
-		if distanceMeters(beforePoint, secondary[idx]) <= maxDist {
-			startCandidates = append(startCandidates, idx)
+	candidates := make([]candidate, 0, 32)
+	for idx := startIdx; idx < len(secondary)-1; idx++ {
+		dist := distanceMeters(beforePoint, secondary[idx])
+		if dist <= maxDist {
+			candidates = append(candidates, candidate{idx: idx, dist: dist})
+			if expectedDistanceMeters <= 0 && dist <= 1 {
+				break
+			}
+			if len(candidates) >= 64 {
+				break
+			}
 		}
 	}
 
-	if len(startCandidates) == 0 {
-		return nil, startIdx - 1
+	if len(candidates) == 0 {
+		debug.Reason = fmt.Sprintf("no before anchor within %.0fm", maxDist)
+		return nil, startIdx - 1, debug
 	}
 
-	endCandidates := make([]int, 0)
-	for idx := startIdx + 1; idx < len(secondary); idx++ {
-		if distanceMeters(afterPoint, secondary[idx]) <= maxDist {
-			endCandidates = append(endCandidates, idx)
-		}
+	tieRatio := cfg.AnchorTieBreakRatio
+	if tieRatio <= 0 {
+		tieRatio = DefaultConfig().AnchorTieBreakRatio
 	}
 
-	if len(endCandidates) == 0 {
-		return nil, startIdx - 1
-	}
+	baseDistance := distanceMeters(beforePoint, afterPoint)
+	maxSearchDistance := cfg.MaxSearchDistanceMultiplier*baseDistance + cfg.MaxSearchDistancePaddingMeters
 
-	bestStart, bestEnd := -1, -1
+	bestStart := -1
+	bestEnd := -1
+	bestSegmentKm := 0.0
+	bestStartDist := math.MaxFloat64
 	bestScore := math.MaxFloat64
-	bestLength := -1.0
+	bestAfterDist := math.MaxFloat64
 
-	for _, sIdx := range startCandidates {
-		for _, eIdx := range endCandidates {
-			if eIdx <= sIdx || (usedUntil >= 0 && sIdx <= usedUntil) {
+	for _, cand := range candidates {
+		startIdx := cand.idx
+		startDist := cand.dist
+
+		bestIdx := -1
+		bestEndDist := math.MaxFloat64
+		bestLocalScore := math.MaxFloat64
+
+		for idx := startIdx + 1; idx < len(secondary); idx++ {
+			dist := distanceMeters(afterPoint, secondary[idx])
+			if len(secondaryProgress) <= idx || len(secondaryProgress) <= startIdx {
 				continue
 			}
-			score := distanceMeters(beforePoint, secondary[sIdx]) + distanceMeters(afterPoint, secondary[eIdx])
-			length := 0.0
-			if len(secondaryProgress) > 0 {
-				length = secondaryProgress[eIdx] - secondaryProgress[sIdx]
-			}
-			if length < 0 {
+			pathDistance := secondaryProgress[idx] - secondaryProgress[startIdx]
+			if pathDistance < 0 {
 				continue
 			}
-			if length > bestLength || (math.Abs(length-bestLength) < 1e-6 && score < bestScore) {
-				bestLength = length
-				bestScore = score
-				bestStart = sIdx
-				bestEnd = eIdx
+
+			if dist <= maxDist {
+				var score float64
+				if expectedDistanceMeters > 0 {
+					score = math.Abs(pathDistance - expectedDistanceMeters)
+					tieWindow := expectedDistanceMeters * tieRatio
+					if bestIdx < 0 || score < bestLocalScore || (math.Abs(score-bestLocalScore) <= tieWindow && dist < bestEndDist) {
+						bestLocalScore = score
+						bestEndDist = dist
+						bestIdx = idx
+					}
+				} else {
+					score = pathDistance
+					if bestIdx < 0 || score < bestLocalScore || (math.Abs(score-bestLocalScore) <= 1 && dist < bestEndDist) {
+						bestLocalScore = score
+						bestEndDist = dist
+						bestIdx = idx
+					}
+				}
 			}
+
+			if maxSearchDistance > 0 && pathDistance > maxSearchDistance {
+				break
+			}
+			if expectedDistanceMeters > 0 {
+				upper := cfg.DistanceUpperRatio
+				if upper <= 0 {
+					upper = DefaultConfig().DistanceUpperRatio
+				}
+				if pathDistance > expectedDistanceMeters*upper {
+					break
+				}
+			} else if dist <= 1 {
+				break
+			}
+		}
+
+		if bestIdx < 0 {
+			continue
+		}
+
+		segmentMeters := 0.0
+		if len(secondaryProgress) > bestIdx {
+			segmentMeters = secondaryProgress[bestIdx] - secondaryProgress[startIdx]
+		}
+		segmentKm := segmentMeters / 1000.0
+
+		if !validateSegmentDistance(expectedDistanceMeters, segmentKm, cfg, nil) {
+			continue
+		}
+
+		score := bestLocalScore
+		if expectedDistanceMeters <= 0 {
+			score = segmentMeters
+		}
+
+		if bestStart < 0 || score < bestScore || (math.Abs(score-bestScore) <= expectedDistanceMeters*tieRatio && startDist < bestStartDist) {
+			bestStart = startIdx
+			bestEnd = bestIdx
+			bestSegmentKm = segmentKm
+			bestStartDist = startDist
+			bestAfterDist = bestEndDist
+			bestScore = score
 		}
 	}
 
 	if bestStart < 0 || bestEnd <= bestStart {
-		return nil, startIdx - 1
+		debug.Reason = fmt.Sprintf("no valid anchors within %.0fm", maxDist)
+		return nil, startIdx - 1, debug
 	}
 
-	segment := make([]gpx.Point, bestEnd-bestStart)
-	copy(segment, secondary[bestStart:bestEnd])
+	debug.SegmentStart = bestStart + 1
+	debug.SegmentEnd = bestEnd
+	debug.DistanceKm = bestSegmentKm
+	debug.Reason = fmt.Sprintf("anchors %d(%.0fm)->%d(%.0fm), %.2fkm", bestStart, bestStartDist, bestEnd, bestAfterDist, bestSegmentKm)
 
-	return segment, bestEnd - 1
-}
-
-func withinProgress(idx int, progress []float64, total float64, target float64, tolerance float64) bool {
-	if idx < 0 || idx >= len(progress) || total <= 0 || tolerance <= 0 {
-		return true
+	// Fix: ensure slice length matches source length to avoid zero-valued points
+	segmentStart := bestStart + 1
+	segmentEnd := bestEnd
+	if segmentStart >= segmentEnd {
+		debug.Reason = fmt.Sprintf("empty segment between anchors %d and %d", bestStart, bestEnd)
+		return nil, startIdx - 1, debug
 	}
-	ratio := progress[idx] / total
-	return math.Abs(ratio-target) <= tolerance
+	
+	segment := make([]gpx.Point, segmentEnd-segmentStart)
+	copy(segment, secondary[segmentStart:segmentEnd])
+
+	return segment, bestEnd - 1, debug
 }
 
 func matchWindow(
@@ -518,6 +713,116 @@ func assignInterpolatedTimes(points []gpx.Point, start, end time.Time) {
 	for i := range points {
 		points[i].Time = start.Add(interval * time.Duration(i+1))
 	}
+}
+
+func validateSegmentDistance(expectedMeters float64, segmentDistanceKm float64, cfg Config, debug *SpatialMatchInfo) bool {
+	if expectedMeters <= 0 {
+		return true
+	}
+
+	lower := cfg.DistanceLowerRatio
+	upper := cfg.DistanceUpperRatio
+	if lower <= 0 || upper <= lower {
+		lower = DefaultConfig().DistanceLowerRatio
+		upper = DefaultConfig().DistanceUpperRatio
+	}
+
+	minAllowed := expectedMeters * lower
+	maxAllowed := expectedMeters * upper
+	segmentMeters := segmentDistanceKm * 1000
+	if segmentMeters < minAllowed || segmentMeters > maxAllowed {
+		if debug != nil {
+			dbg := fmt.Sprintf("segment distance %.2fkm outside %.2f–%.2fkm (estimated)", segmentDistanceKm, minAllowed/1000, maxAllowed/1000)
+			if debug.Reason == "" {
+				debug.Reason = dbg
+			} else {
+				debug.Reason += "; " + dbg
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func estimateExpectedDistanceMeters(beforeContext, afterContext []gpx.Point, gap time.Duration, cfg Config) float64 {
+	if gap <= 0 {
+		return 0
+	}
+
+	beforeSpeed, okBefore := averageSpeed(beforeContext)
+	afterSpeed, okAfter := averageSpeed(afterContext)
+
+	// Check if both contexts represent stationary periods (athlete standing still)
+	const stationaryThreshold = 0.1 // 0.1 m/s = very slow movement
+	beforeStationary := okBefore && beforeSpeed < stationaryThreshold
+	afterStationary := okAfter && afterSpeed < stationaryThreshold
+	
+	// If both contexts are stationary (pause situation), disable distance validation
+	// This allows proper detection of loops during pauses
+	if beforeStationary && afterStationary {
+		return 0 // Return 0 to disable distance validation
+	}
+
+	var selectedSpeed float64
+	switch {
+	case okBefore && okAfter:
+		// If one context is stationary but the other shows movement, use the moving one
+		if beforeStationary && !afterStationary {
+			selectedSpeed = afterSpeed
+		} else if afterStationary && !beforeStationary {
+			selectedSpeed = beforeSpeed
+		} else {
+			// Both are moving - use existing logic
+			slower := math.Min(beforeSpeed, afterSpeed)
+			faster := math.Max(beforeSpeed, afterSpeed)
+			if slower > 0 && faster/slower > cfg.MaxSpeedRatio {
+				selectedSpeed = slower
+			} else {
+				selectedSpeed = (beforeSpeed + afterSpeed) / 2
+			}
+		}
+	case okBefore && !beforeStationary:
+		selectedSpeed = beforeSpeed
+	case okAfter && !afterStationary:
+		selectedSpeed = afterSpeed
+	default:
+		return 0 // Disable distance validation
+	}
+
+	if selectedSpeed < cfg.MinReliableSpeedMPS {
+		return 0 // Disable distance validation for unreliable speeds
+	}
+
+	return selectedSpeed * gap.Seconds()
+}
+
+func averageSpeed(points []gpx.Point) (float64, bool) {
+	if len(points) < 2 {
+		return 0, false
+	}
+
+	var distanceSum float64
+	var durationSum float64
+
+	for i := 1; i < len(points); i++ {
+		prev := points[i-1]
+		curr := points[i]
+		if prev.Time.IsZero() || curr.Time.IsZero() {
+			continue
+		}
+		dt := curr.Time.Sub(prev.Time).Seconds()
+		if dt <= 0 {
+			continue
+		}
+		distanceSum += distanceMeters(prev, curr)
+		durationSum += dt
+	}
+
+	if durationSum <= 0 {
+		return 0, false
+	}
+
+	return distanceSum / durationSum, true
 }
 
 func computeProgress(points []gpx.Point) ([]float64, float64) {

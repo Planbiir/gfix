@@ -59,6 +59,20 @@ func main() {
 	fmt.Printf("\nMerge stats: gaps_detected=%d gaps_filled=%d inserted_points=%d spatial_matches=%d\n",
 		stats.GapsDetected, stats.GapsFilled, stats.InsertedPoints, stats.SpatialMatches)
 
+	// Print spatial matching debug information
+	if len(stats.SpatialDebugInfo) > 0 {
+		fmt.Printf("\nSpatial matching details:\n")
+		for _, info := range stats.SpatialDebugInfo {
+			fmt.Printf("  Gap #%d: %s -> %s\n", info.GapIndex+1, info.BeforeAnchor, info.AfterAnchor)
+			if info.Valid {
+				fmt.Printf("    ✓ Inserted: indices %d-%d, distance %.2fkm\n", info.SegmentStart, info.SegmentEnd, info.DistanceKm)
+				fmt.Printf("    ✓ Reason: %s\n", info.Reason)
+			} else {
+				fmt.Printf("    ✗ Rejected: %s\n", info.Reason)
+			}
+		}
+	}
+
 	mergedPoints := merged.FlattenPoints()
 	fmt.Printf("\nMerged track summary:\n")
 	printTrackStats(mergedPoints)
